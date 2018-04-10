@@ -1,0 +1,187 @@
+=MakeExportable
+
+MakeExportable is a Rails gem/plugin to assist in exporting application data in a variety of formats. Filter and limit the data exported using ActiveRecord. Export returned values from instance methods as easily as database columns.
+
+
+==Supported Formats 
+
+* CSV: Comma-separated values
+* TSV: Tab-separated values
+* XLS: Excel Spreadsheet
+* JSON: JavaScript Object Notation
+* XML: Extensible markup language
+* HTML: Hypertext markup language
+	
+	
+==Installation
+  
+* gem - sudo gem install make_exportable
+* plugin - script/plugin install git@github.com:novafabrica/make_exportable.git
+
+
+==Basic Usage
+
+To start using MakeExportable simply add a call to <em>make_exportable</em> in any class you want to use for exporting data.
+
+  class Customer < ActiveRecord::Base
+    make_exportable 
+  end
+
+To export data you simply call the class method <em>to_export</em> and specify your desired format (see supported formats above).
+
+  Customer.to_export("csv")
+
+You can select the columns you want to return using the :only and :except options.  The default is to export all columns.
+
+  Customer.to_export("csv", :only => [:first_name, :last_name, :email])
+  Customer.to_export("csv", :except => [:hashed_password, :salt])
+  
+You can change the result set by passing in an array of :scopes to call, you can pass in finder options (such as :conditions, :order, :limit, :offset, etc.), or you can call <em>to_export</em> on a class that has already been scoped using named scopes.
+
+  Customer.to_export(:xls, :scopes => ["approved", "sorted"])
+  Customer.to_export(:xls, :conditions => {:approved => true}, :order => "first_name ASC", :limit => 50)
+  Customer.visible.where(:approved => true).to_export(:xls)
+
+<em>to_export</em> returns an array of the data in the specified format and the corresponding mime-type.  This is done to make sending files easy.
+
+  ["First Name,Last Name,Email\nJohn,Doe,x@x.com\nJoe,Smith,y@y.com\n", "text/csv; charset=utf-8; header=present"]
+
+Then in a controller, you can use the <em>send_data</em> method to send the export as a downloadable file to the user's browser.
+
+  class CustomerController < ApplicationController
+
+    def export
+      # Export the data
+      options = {:only => [:first_name, :last_name, :city, :country, :email]}
+      export_data, data_type = Customer.visible.to_export('csv', options)
+
+      # Send data to user as file
+      send_data(export_data, { :type => data_type, :disposition => 'attachment', :filename => "customer_export.csv" })
+    end
+
+  end
+
+
+==Attributes and Methods
+
+MakeExportable doesn't just export attributes that have database columns. It can also export data returned from methods.
+
+  class Customer < ActiveRecord::Base
+    make_exportable 
+    
+    def full_name
+      "#{first_name} #{last_name}"
+    end
+    
+    def last_purchase
+      last_order = orders.order('created_at ASC').last
+      return last_order ? last_order.created_at : ''
+    end
+  end
+
+  Customer.to_export("csv", :only => [:full_name, :email, :last_purchase])
+
+If you want an attribute to be handled differently whenever it is exported, you can define a method with the syntax <em>#{attribute}_export</em> which will be called when exporting instead of the regular attribute.
+
+  class Customer < ActiveRecord::Base
+    make_exportable 
+
+    def visible_export
+      visible ? 'Visible' : 'Not Visible'
+    end
+    
+    def updated_at_export
+      updated_at.to_s(:long)
+    end
+  end
+
+
+==Setting Export Defaults
+
+If you have a general columns, scopes, and conditions you will be calling in multiple methods you can attach them to the <em>make_exportable</em> method as defaults when including it into your class.
+
+* :only and :except - specify columns or methods to export (defaults to all columns)
+* :as - specify formats to allow for exporting (defaults to all formats)
+* :scopes - specify scopes to be called on the class before exporting
+
+These are defaults which can still be overridden when you perform an export.
+
+  class Customer < ActiveRecord::Base
+    make_exportable :as => [:csv, :tsv], :only => [:first_name, :last_name, :email], :scopes => ['visible', 'recent']
+  end
+
+  class User < ActiveRecord::Base
+    make_exportable :except => [:hashed_password, :salt]
+  end
+
+
+==Magic Methods
+
+MakeExportable also allows you to export to a format using a dynamic name.  Each export format gets two "magic methods".
+
+  to_#{format}_export
+  create_#{format}_report
+
+In both cases "format" represents the lowercase abbreviation for the export format (e.g. "to_csv_export", "create_csv_report"). Then the options hash becomes the first argument instead of the second.
+
+  Customer.to_csv_export(:conditions => {:visible => true}, :order => "last_name ASC")
+  Customer.visible.to_csv_export(:only => [:username, :email])
+
+
+==Reports From Other Data
+
+If you just have some data you want to export in the right format, MakeExportable exposes the <em>create_report</em> method to use your own data set.
+
+  Customer.create_report("csv", [row1_array, row2_array, row3_array], {:headers => headers_array})
+
+Just pass in the format and an ordered array of rows for the data set.  You can also pass in an array of headers as :headers in the options hash.  Remember the row size and the header size need to be the same. 
+
+
+==Which Classes and Formats Can Be Exported
+
+MakeExportable keeps a hash of classes that have been enabled as being exportable. The keys of this hash provide an easy reference if you need to know which classes are supported.  You can also query a class directly using <em>exportable?</em>.
+
+  MakeExportable.exportable_classes
+  # => {"Customer" => Customer, "Product" => Product, "Order" => Order}
+  MakeExportable.exportable_classes.keys
+  # => ["Customer", "Product", "Order"]
+  MakeExportable.exportable_classes.include?("Customer")
+  # => true
+  Customer.exportable?
+  # => true
+  LineItem.exportable?
+  # => false
+
+Note that this list will only include classes which have been loaded.  In production mode that will be all classes, but development mode lazy-loads classes as they are needed.  If you need a full list, you can ask Rails to load all classes so they will all "register" themselves with MakeExportable.
+
+  if Rails.env == 'development'
+    Rails::Initializer.run(:load_application_classes)
+  end
+
+MakeExportable also maintains a hash of the available export formats.  The keys of this hash are an array of symbols for all supported formats.
+
+  MakeExportable.exportable_formats
+  # => { :csv => MakeExportable::CSV, :xls => MakeExportable::Excel, :html => MakeExportable::HTML, :json => MakeExportable::JSON, :tsv => MakeExportable::TSV, :xml => MakeExportable::XML }
+  MakeExportable.exportable_formats.keys
+  # => [:csv, :xls, :html, :json, :tsv, :xml]
+
+
+==Info
+  
+Author: Kevin Skoglund & Matthew Bergman, Nova Fabrica, Inc.
+
+License: Copyright 2010 by Kevin Skoglund. released under the attached MIT-LICENSE. 
+
+GitHub: http://github.com/novafabrica/make_exportable/tree/master
+
+
+==Bug Reports and Feedback
+
+Bug reports should be submitted at https://github.com/novafabrica/make_exportable/issues
+
+Other feedback is welcomed at info@novafabrica.com
+
+
+==Warranty
+
+This software is provided "as is" and without any express or implied warranties, including, without limitation, the implied warranties of merchantability and fitness for a particular purpose.
