@@ -1,6 +1,6 @@
 source "http://rubygems.org"
 
-gem 'make_exportable', git: 'https://github.com/codelittinc/make_exportable'
+gem 'rails'
 
 group :development do
   gem 'jeweler'
